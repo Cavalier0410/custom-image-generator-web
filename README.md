@@ -2,7 +2,7 @@
 
 这是一个独立的 Web 生图工作台，面向浏览器使用。前端只负责输入 API Key、选择模型、上传参考图、填写提示词、提交生成、展示结果和展示本地历史记录。
 
-线上版本部署为 Vercel 静态前端，`/api/*` 请求通过 `vercel.json` 转发到中转站：
+线上版本部署为 Vercel 静态前端，Provider 请求通过 `vercel.json` 转发到中转站：
 
 ```text
 https://api.lts4ai.com
@@ -28,7 +28,7 @@ http://127.0.0.1:5174/
 - 前端：`http://127.0.0.1:5174`
 - 本地 API：`http://127.0.0.1:8787`
 
-本地开发仍可使用当前 Express 服务调试 `/api/models` 和 `/api/generate`。Vercel 部署时不会使用这个本地 Express 服务。
+本地开发会通过 Vite 代理把 `/v1/*` 和 `/v1beta/*` 转发到 `https://api.lts4ai.com`。Vercel 部署时不会使用本地 Express 服务。
 
 ## 生产构建
 
@@ -55,7 +55,8 @@ npm run preview
 
 - Vercel 只构建前端：`npm run build:web`
 - 输出目录：`dist`
-- `/api/:path*` → `https://api.lts4ai.com/api/:path*`
+- `/v1/:path*` → `https://api.lts4ai.com/v1/:path*`
+- `/v1beta/:path*` → `https://api.lts4ai.com/v1beta/:path*`
 - 其他路径回退到 `/index.html`，用于前端单页应用刷新
 
 ## GitHub 上传

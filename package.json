@@ -10,8 +10,9 @@
     "build": "npm run build:web && npm run build:server",
     "build:web": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
-    "test": "npm run test:ui-contract",
+    "test": "npm run test:ui-contract && npm run test:routing-contract",
     "test:ui-contract": "node scripts/check-ui-contract.mjs",
+    "test:routing-contract": "node scripts/check-routing-contract.mjs",
     "start": "node dist-server/index.js",
     "preview": "vite preview --host 127.0.0.1 --port 4174"
   },

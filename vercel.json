@@ -3,8 +3,12 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
-      "source": "/api/:path*",
-      "destination": "https://api.lts4ai.com/api/:path*"
+      "source": "/v1/:path*",
+      "destination": "https://api.lts4ai.com/v1/:path*"
+    },
+    {
+      "source": "/v1beta/:path*",
+      "destination": "https://api.lts4ai.com/v1beta/:path*"
     },
     {
       "source": "/(.*)",

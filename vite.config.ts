@@ -7,7 +7,15 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5174,
     proxy: {
-      "/api": "http://127.0.0.1:8787"
+      "/api": "http://127.0.0.1:8787",
+      "/v1": {
+        target: "https://api.lts4ai.com",
+        changeOrigin: true
+      },
+      "/v1beta": {
+        target: "https://api.lts4ai.com",
+        changeOrigin: true
+      }
     }
   }
 });
