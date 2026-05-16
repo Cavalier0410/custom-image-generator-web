@@ -215,6 +215,10 @@ h2 {
   gap: 10px;
 }
 
+.single-field-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 input,
 select,
 textarea {
@@ -248,10 +252,6 @@ textarea {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 44px;
   gap: 8px;
-}
-
-.seed-control {
-  grid-template-columns: minmax(0, 1fr) 64px;
 }
 
 .icon-button,

@@ -34,8 +34,6 @@ export interface WorkspaceState {
   baseUrl: string;
   modelName: string;
   protocol: ProviderProtocol;
-  seed: number;
-  seedLocked: boolean;
   aspectRatio: AspectRatio;
   imageSize: ImageSize;
   concurrency: number;
@@ -57,7 +55,6 @@ export interface HistoryItem {
   prompt: string;
   modelName: string;
   protocol: ProviderProtocol;
-  seed: number;
   aspectRatio: AspectRatio;
   imageSize: ImageSize;
   inputImageNames: string[];

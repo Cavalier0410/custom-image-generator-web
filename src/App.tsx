@@ -22,6 +22,8 @@ const WORKSPACE_KEY = "custom-image-workspace-v2";
 const HISTORY_KEY = "custom-image-history-v1";
 const INPUT_IMAGE_LIMIT = 4;
 const HISTORY_LIMIT = 40;
+const DEFAULT_BASE_URL = "https://api.lts4ai.com";
+const LEGACY_DEFAULT_BASE_URLS = new Set(["http://64.186.244.43:12001"]);
 const LEGACY_DEFAULT_PROMPTS = new Set([
   "把参考图中的服装穿到模特身上，保持版型、材质和细节一致。"
 ]);
@@ -47,11 +49,9 @@ const DEFAULT_WORKSPACE: WorkspaceState = {
   theme: "light",
   prompt: "",
   apiKey: "",
-  baseUrl: "http://64.186.244.43:12001",
+  baseUrl: DEFAULT_BASE_URL,
   modelName: "",
   protocol: "gemini_generate_content",
-  seed: 0,
-  seedLocked: false,
   aspectRatio: "Adaptive",
   imageSize: "2K",
   concurrency: 1
@@ -63,8 +63,15 @@ function readStoredWorkspace(): WorkspaceState {
     const parsed = raw ? JSON.parse(raw) : {};
     const workspace = { ...DEFAULT_WORKSPACE, ...parsed };
     return {
-      ...workspace,
-      prompt: LEGACY_DEFAULT_PROMPTS.has(workspace.prompt) ? "" : workspace.prompt
+      theme: workspace.theme === "dark" ? "dark" : "light",
+      prompt: LEGACY_DEFAULT_PROMPTS.has(workspace.prompt) ? "" : workspace.prompt,
+      apiKey: typeof workspace.apiKey === "string" ? workspace.apiKey : "",
+      baseUrl: LEGACY_DEFAULT_BASE_URLS.has(workspace.baseUrl) ? DEFAULT_BASE_URL : workspace.baseUrl,
+      modelName: typeof workspace.modelName === "string" ? workspace.modelName : "",
+      protocol: workspace.protocol,
+      aspectRatio: workspace.aspectRatio,
+      imageSize: workspace.imageSize,
+      concurrency: Math.min(10, Math.max(1, Number.parseInt(String(workspace.concurrency), 10) || 1))
     };
   } catch {
     return DEFAULT_WORKSPACE;
@@ -362,7 +369,7 @@ export default function App() {
     }
 
     const requestCount = Math.min(10, Math.max(1, workspace.concurrency));
-    const seeds = Array.from({ length: requestCount }, () => (workspace.seedLocked ? workspace.seed : randomSeed()));
+    const seeds = Array.from({ length: requestCount }, randomSeed);
 
     setIsGenerating(true);
     setStatusMessage(`正在生成 ${requestCount} 张图片...`);
@@ -391,7 +398,6 @@ export default function App() {
         prompt: workspace.prompt,
         modelName: workspace.modelName,
         protocol: workspace.protocol,
-        seed: result.value.seed,
         aspectRatio: workspace.aspectRatio,
         imageSize: workspace.imageSize,
         inputImageNames: inputImages.map((image) => image.name),
@@ -402,7 +408,6 @@ export default function App() {
       setHistory((current) => [...createdItems.reverse(), ...current].slice(0, HISTORY_LIMIT));
       if (newestItem) {
         setSelectedHistoryId(newestItem.id);
-        updateWorkspace({ seed: newestItem.seed });
       }
 
       setStatusMessage(
@@ -500,7 +505,7 @@ export default function App() {
             <span>Base URL</span>
             <input
               onChange={(event) => updateWorkspace({ baseUrl: event.currentTarget.value, modelName: "" })}
-              placeholder="http://64.186.244.43:12001"
+              placeholder={DEFAULT_BASE_URL}
               type="url"
               value={workspace.baseUrl}
             />
@@ -571,27 +576,7 @@ export default function App() {
             </label>
           </div>
 
-          <div className="field-row">
-            <label className="field">
-              <span>种子</span>
-              <div className="inline-control seed-control">
-                <input
-                  min={0}
-                  onChange={(event) => updateWorkspace({ seed: Number.parseInt(event.currentTarget.value, 10) || 0 })}
-                  type="number"
-                  value={workspace.seed}
-                />
-                <button
-                  aria-label={workspace.seedLocked ? "解锁种子" : "锁定种子"}
-                  className={`text-button small ${workspace.seedLocked ? "is-active" : ""}`}
-                  onClick={() => updateWorkspace({ seedLocked: !workspace.seedLocked })}
-                  type="button"
-                >
-                  {workspace.seedLocked ? "锁定" : "随机"}
-                </button>
-              </div>
-            </label>
-
+          <div className="field-row single-field-row">
             <label className="field">
               <span>数量</span>
               <input
@@ -706,7 +691,7 @@ export default function App() {
                 <div className="output-actions">
                   <div>
                     <strong>{visibleHistoryItem.modelName}</strong>
-                    <span>{formatTime(visibleHistoryItem.createdAt)} · seed {visibleHistoryItem.seed}</span>
+                    <span>{formatTime(visibleHistoryItem.createdAt)}</span>
                   </div>
                   <button
                     className="text-button"
