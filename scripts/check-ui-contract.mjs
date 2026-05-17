@@ -35,5 +35,8 @@ assert(index.includes('rel="icon"') && index.includes("/image-studio-icon.svg"),
 assert(app.includes('href="https://ctikki.com"'), "Brand title must link to ctikki.com.");
 assert(app.includes(">Image Studio<"), "Primary brand title must render Image Studio.");
 assert(app.includes("/image-studio-icon.svg"), "Header brand mark must use the Image Studio icon.");
+assert(app.includes("downloadSelectedHistory"), "History manager must support batch image downloads.");
+assert(app.includes('title="下载选中"'), "History manager must expose a selected-download button.");
+assert(app.includes("selectedItems.forEach((item) => downloadDataUrl"), "Batch download must reuse the existing image downloader.");
 
 console.log("UI contract checks passed.");

@@ -461,6 +461,23 @@ export default function App() {
     setIsManagingHistory(false);
   };
 
+  const downloadSelectedHistory = () => {
+    const targets = new Set(selectedHistoryIds);
+    const selectedItems = history.filter((item) => targets.has(item.id));
+
+    if (selectedItems.length === 0) {
+      setStatusMessage("请先选择要下载的历史图片。");
+      return;
+    }
+
+    selectedItems.forEach((item) => downloadDataUrl({
+      dataUrl: item.imageDataUrl,
+      mimeType: item.mimeType,
+      createdAt: item.createdAt
+    }));
+    setStatusMessage(`已开始下载 ${selectedItems.length} 张图片。`);
+  };
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -751,6 +768,16 @@ export default function App() {
               </div>
               {isManagingHistory ? (
                 <div className="history-actions">
+                  <button
+                    aria-label="下载选中"
+                    className="icon-button control-button"
+                    disabled={selectedHistoryIds.length === 0}
+                    onClick={downloadSelectedHistory}
+                    title="下载选中"
+                    type="button"
+                  >
+                    <Download size={17} />
+                  </button>
                   <button
                     className="icon-button control-button"
                     disabled={selectedHistoryIds.length === 0}
