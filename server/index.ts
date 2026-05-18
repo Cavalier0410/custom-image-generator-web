@@ -116,7 +116,25 @@ function providerImageConfig(input: Pick<GenerateRequest, "aspectRatio" | "image
   };
 }
 
-function toOpenAiImageSize(aspectRatio: AspectRatio) {
+const OPENAI_IMAGE_4K_SIZE_BY_RATIO: Record<Exclude<AspectRatio, "Adaptive">, string> = {
+  "1:1": "2880x2880",
+  "16:9": "3840x2160",
+  "21:9": "3840x1648",
+  "4:3": "3264x2448",
+  "3:2": "3504x2336",
+  "5:4": "3200x2560",
+  "2:1": "3840x1920",
+  "3:4": "2448x3264",
+  "2:3": "2336x3504",
+  "4:5": "2560x3200",
+  "9:16": "2160x3840"
+};
+
+function toOpenAiImageSize(aspectRatio: AspectRatio, imageSize: ImageSize) {
+  if (imageSize === "4K") {
+    return aspectRatio === "Adaptive" ? "3840x2160" : OPENAI_IMAGE_4K_SIZE_BY_RATIO[aspectRatio];
+  }
+
   switch (aspectRatio) {
     case "1:1":
       return "1024x1024";
@@ -528,7 +546,7 @@ async function generateWithOpenAiImages(input: GenerateRequest, timeoutMs: numbe
         prompt: input.prompt,
         n: 1,
         response_format: "b64_json",
-        size: toOpenAiImageSize(input.aspectRatio)
+        size: toOpenAiImageSize(input.aspectRatio, input.imageSize)
       });
 
   if (hasInputImages && body instanceof FormData) {
@@ -536,7 +554,8 @@ async function generateWithOpenAiImages(input: GenerateRequest, timeoutMs: numbe
     body.append("prompt", input.prompt);
     body.append("n", "1");
     body.append("response_format", "b64_json");
-    body.append("size", toOpenAiImageSize(input.aspectRatio));
+    body.append("size", toOpenAiImageSize(input.aspectRatio, input.imageSize));
+    body.append("output_format", "png");
     input.inputImages.forEach((image, index) => {
       const bytes = Buffer.from(image.data, "base64");
       const blob = new Blob([new Uint8Array(bytes)], { type: image.mimeType });
