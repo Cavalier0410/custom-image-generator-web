@@ -236,6 +236,13 @@ h2 {
   min-height: 18px;
 }
 
+.field-hint {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 520;
+  line-height: 1.45;
+}
+
 .field-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -281,6 +288,81 @@ textarea {
   gap: 8px;
 }
 
+.segmented-control {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+  padding: 4px;
+}
+
+.segmented-control button {
+  min-width: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 820;
+  padding: 8px;
+}
+
+.segmented-control button.is-active {
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: 0 1px 8px rgba(25, 35, 29, 0.08);
+}
+
+.advanced-box {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface-muted) 52%, transparent);
+  padding: 10px;
+}
+
+.advanced-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.advanced-toggle span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 850;
+}
+
+.advanced-toggle small {
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.advanced-content {
+  display: grid;
+  gap: 10px;
+  padding-top: 2px;
+}
+
 .icon-button,
 .text-button,
 .run-button {
@@ -323,6 +405,7 @@ textarea {
 }
 
 .text-button.is-active,
+.icon-button.is-active,
 .icon-button:hover,
 .text-button:hover {
   border-color: var(--accent);
@@ -541,6 +624,10 @@ textarea {
   cursor: pointer;
 }
 
+.generation-task-card.is-queued {
+  background: color-mix(in srgb, var(--surface-raised) 80%, var(--surface-muted));
+}
+
 .generation-task-card.is-failed {
   border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
   background: color-mix(in srgb, var(--surface-raised) 92%, var(--warn));
@@ -582,6 +669,14 @@ textarea {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.queued-dot {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-raised);
 }
 
 .generation-task-copy {

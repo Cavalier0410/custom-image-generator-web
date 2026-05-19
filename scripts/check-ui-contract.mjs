@@ -25,12 +25,13 @@ assert(
   "The old default Base URL must be migrated for existing localStorage users."
 );
 
-assert(!app.includes("<span>种子</span>"), "Seed label must not be rendered in the parameter panel.");
-assert(!app.includes("· seed"), "Seed metadata must not be shown in the result panel.");
-assert(!app.includes("seed-control"), "Seed-specific control class must not be used.");
-assert(!app.includes("seedLocked"), "Seed lock state must not exist in the UI.");
-assert(!app.includes("workspace.seed"), "Workspace seed state must not be used by the UI.");
-assert(!types.includes("seedLocked"), "WorkspaceState must not expose seedLocked.");
+assert(app.includes("高级参数"), "Seed controls must live under the advanced parameter panel.");
+assert(app.includes("seedLocked"), "Advanced seed lock state must be available.");
+assert(app.includes("workspace.seed"), "Workspace seed state must be available for reproducible batches.");
+assert(types.includes("seedLocked"), "WorkspaceState must expose seedLocked for advanced mode.");
+assert(app.includes("同提示词 N 张") && app.includes("多提示词队列"), "Prompt generation mode switch must be rendered.");
+assert(app.includes("parsePromptQueue"), "Prompt queue mode must parse one prompt per line.");
+assert(app.includes("resolveEffectiveAspectRatio"), "Adaptive mode must follow the first reference image when dimensions are available.");
 
 assert(index.includes("<title>image studio-你的专属生图台</title>"), "Browser tab title must use the Image Studio branding.");
 assert(index.includes('rel="icon"') && index.includes("/image-studio-icon.svg"), "Browser tab must use the Image Studio icon.");

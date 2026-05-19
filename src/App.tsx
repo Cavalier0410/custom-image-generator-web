@@ -5,17 +5,21 @@ import {
   EyeOff,
   Image as ImageIcon,
   Loader2,
+  Lock,
   Moon,
   Play,
   Plus,
   RefreshCw,
+  SlidersHorizontal,
   Sun,
   Trash2,
+  Unlock,
   UploadCloud,
   X
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { fetchProviderModels, generateImage, toUserFacingError } from "./api";
+import { createGenerationPlan, parsePromptQueue, resolveEffectiveAspectRatio } from "./generationPlan";
 import { loadStoredHistory, saveStoredHistory } from "./historyStore";
 import type { AspectRatio, HistoryItem, ImageSize, InputImage, ProviderModelOption, WorkspaceState } from "./types";
 import { downloadHistoryAsZip } from "./zipArchive";
@@ -46,13 +50,16 @@ const ASPECT_RATIO_OPTIONS: Array<{ value: AspectRatio; label: string }> = [
 
 const IMAGE_SIZES: ImageSize[] = ["4K", "2K", "1K"];
 
-type GenerationTaskStatus = "running" | "success" | "failed";
+type GenerationTaskStatus = "queued" | "running" | "success" | "failed";
 
 interface GenerationTask {
   id: string;
   index: number;
   status: GenerationTaskStatus;
   message: string;
+  prompt?: string;
+  seed?: number;
+  aspectRatio?: AspectRatio;
   imageDataUrl?: string;
   mimeType?: string;
   createdAt?: string;
@@ -68,7 +75,10 @@ const DEFAULT_WORKSPACE: WorkspaceState = {
   protocol: "gemini_generate_content",
   aspectRatio: "Adaptive",
   imageSize: "2K",
-  concurrency: 1
+  concurrency: 1,
+  promptMode: "count",
+  seed: 0,
+  seedLocked: false
 };
 
 function readStoredWorkspace(): WorkspaceState {
@@ -85,7 +95,10 @@ function readStoredWorkspace(): WorkspaceState {
       protocol: workspace.protocol,
       aspectRatio: workspace.aspectRatio,
       imageSize: workspace.imageSize,
-      concurrency: Math.min(10, Math.max(1, Number.parseInt(String(workspace.concurrency), 10) || 1))
+      concurrency: Math.min(10, Math.max(1, Number.parseInt(String(workspace.concurrency), 10) || 1)),
+      promptMode: workspace.promptMode === "queue" ? "queue" : "count",
+      seed: Math.max(0, Number.parseInt(String(workspace.seed), 10) || 0),
+      seedLocked: Boolean(workspace.seedLocked)
     };
   } catch {
     return DEFAULT_WORKSPACE;
@@ -100,20 +113,32 @@ function parseDataUrl(dataUrl: string) {
   return { mimeType: match[1], data: match[2] };
 }
 
+function readImageDimensions(dataUrl: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
+    image.onerror = () => reject(new Error("Image dimensions unavailable."));
+    image.src = dataUrl;
+  });
+}
+
 function fileToInputImage(file: File): Promise<InputImage> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error(`读取失败：${file.name}`));
-    reader.onload = () => {
+    reader.onload = async () => {
       const dataUrl = String(reader.result ?? "");
       const parsed = parseDataUrl(dataUrl);
+      const dimensions = await readImageDimensions(dataUrl).catch(() => null);
       resolve({
         id: `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         name: file.name,
         mimeType: parsed.mimeType,
         data: parsed.data,
         dataUrl,
-        size: file.size
+        size: file.size,
+        width: dimensions?.width,
+        height: dimensions?.height
       });
     };
     reader.readAsDataURL(file);
@@ -188,6 +213,7 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [statusMessage, setStatusMessage] = useState("工作台就绪。");
   const [isApiKeyVisible, setIsApiKeyVisible] = useState(false);
+  const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<HistoryItem | null>(null);
   const [fileAction, setFileAction] = useState<{ mode: "append" | "replace"; index: number | null }>({
     mode: "append",
@@ -208,10 +234,19 @@ export default function App() {
     () => modelOptions.find((model) => model.id === workspace.modelName) ?? null,
     [modelOptions, workspace.modelName]
   );
+  const promptQueue = useMemo(() => parsePromptQueue(workspace.prompt), [workspace.prompt]);
+  const plannedTaskCount =
+    workspace.promptMode === "queue"
+      ? promptQueue.length
+      : Math.min(10, Math.max(1, Number.parseInt(String(workspace.concurrency), 10) || 1));
+  const effectiveAspectRatio = useMemo(
+    () => resolveEffectiveAspectRatio(workspace.aspectRatio, inputImages),
+    [inputImages, workspace.aspectRatio]
+  );
   const canGenerate =
     !isGenerating &&
     !isLoadingModels &&
-    workspace.prompt.trim().length > 0 &&
+    plannedTaskCount > 0 &&
     workspace.baseUrl.trim().length > 0 &&
     workspace.modelName.trim().length > 0 &&
     modelOptions.some((model) => model.id === workspace.modelName);
@@ -407,71 +442,101 @@ export default function App() {
       return;
     }
 
-    const requestCount = Math.min(10, Math.max(1, workspace.concurrency));
-    const taskInputs = Array.from({ length: requestCount }, (_, index) => ({
-      id: `task-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
-      index,
-      seed: randomSeed()
-    }));
+    const taskInputs = createGenerationPlan({
+      workspace,
+      inputImages,
+      createId: (index) => `task-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
+      createRandomSeed: randomSeed
+    });
+
+    if (taskInputs.length === 0) {
+      setStatusMessage("请至少填写一行有效提示词。");
+      return;
+    }
+
+    if (!workspace.seedLocked && taskInputs[0]) {
+      updateWorkspace({ seed: taskInputs[0].seed });
+    }
 
     setIsGenerating(true);
     setGenerationTasks(
       taskInputs.map((task) => ({
         id: task.id,
         index: task.index,
-        status: "running",
-        message: "正在生成"
+        status: workspace.promptMode === "queue" && task.index > 0 ? "queued" : "running",
+        message: workspace.promptMode === "queue" && task.index > 0 ? "等待队列" : "正在生成",
+        prompt: task.prompt,
+        seed: task.seed,
+        aspectRatio: task.aspectRatio
       }))
     );
-    setStatusMessage(`正在生成 ${requestCount} 张图片...`);
+    setStatusMessage(
+      workspace.promptMode === "queue" ? `队列生成中：共 ${taskInputs.length} 条提示词。` : `正在生成 ${taskInputs.length} 张图片...`
+    );
 
     try {
-      const results = await Promise.allSettled(
-        taskInputs.map(async (task) => {
-          try {
-            const result = await generateImage({
-              workspace,
-              inputImages,
-              seed: task.seed
-            });
-            const item: HistoryItem = {
-              id: result.id,
-              imageDataUrl: result.image.dataUrl,
-              mimeType: result.image.mimeType,
-              prompt: workspace.prompt,
-              modelName: workspace.modelName,
-              protocol: workspace.protocol,
-              aspectRatio: workspace.aspectRatio,
-              imageSize: workspace.imageSize,
-              inputImageNames: inputImages.map((image) => image.name),
-              createdAt: result.createdAt
-            };
+      const runTask = async (task: (typeof taskInputs)[number]) => {
+        setGenerationTasks((current) =>
+          current.map((candidate) => (candidate.id === task.id ? { ...candidate, status: "running", message: "正在生成" } : candidate))
+        );
 
-            setGenerationTasks((current) =>
-              current.map((candidate) =>
-                candidate.id === task.id
-                  ? {
-                      ...candidate,
-                      status: "success",
-                      message: "生成完成",
-                      imageDataUrl: item.imageDataUrl,
-                      mimeType: item.mimeType,
-                      createdAt: item.createdAt,
-                      historyId: item.id
-                    }
-                  : candidate
-              )
-            );
-            return item;
-          } catch (error) {
-            const message = compactError(error);
-            setGenerationTasks((current) =>
-              current.map((candidate) => (candidate.id === task.id ? { ...candidate, status: "failed", message } : candidate))
-            );
-            throw new Error(message);
-          }
-        })
-      );
+        try {
+          const result = await generateImage({
+            workspace: { ...workspace, prompt: task.prompt, aspectRatio: task.aspectRatio },
+            inputImages,
+            seed: task.seed
+          });
+          const item: HistoryItem = {
+            id: result.id,
+            imageDataUrl: result.image.dataUrl,
+            mimeType: result.image.mimeType,
+            prompt: task.prompt,
+            modelName: workspace.modelName,
+            protocol: workspace.protocol,
+            aspectRatio: task.aspectRatio,
+            imageSize: workspace.imageSize,
+            seed: task.seed,
+            inputImageNames: inputImages.map((image) => image.name),
+            createdAt: result.createdAt
+          };
+
+          setGenerationTasks((current) =>
+            current.map((candidate) =>
+              candidate.id === task.id
+                ? {
+                    ...candidate,
+                    status: "success",
+                    message: "生成完成",
+                    imageDataUrl: item.imageDataUrl,
+                    mimeType: item.mimeType,
+                    createdAt: item.createdAt,
+                    historyId: item.id
+                  }
+                : candidate
+            )
+          );
+          return item;
+        } catch (error) {
+          const message = compactError(error);
+          setGenerationTasks((current) =>
+            current.map((candidate) => (candidate.id === task.id ? { ...candidate, status: "failed", message } : candidate))
+          );
+          throw new Error(message);
+        }
+      };
+
+      const results =
+        workspace.promptMode === "queue"
+          ? await taskInputs.reduce<Promise<PromiseSettledResult<HistoryItem>[]>>(async (pending, task) => {
+              const settled = await pending;
+              try {
+                settled.push({ status: "fulfilled", value: await runTask(task) });
+              } catch (reason) {
+                settled.push({ status: "rejected", reason });
+              }
+              return settled;
+            }, Promise.resolve([]))
+          : await Promise.allSettled(taskInputs.map(runTask));
       const fulfilled = results.filter((result): result is PromiseFulfilledResult<HistoryItem> => result.status === "fulfilled");
       const rejected = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
 
@@ -516,11 +581,12 @@ export default function App() {
         id: task.historyId,
         imageDataUrl: task.imageDataUrl,
         mimeType: task.mimeType,
-        prompt: workspace.prompt,
+        prompt: task.prompt ?? workspace.prompt,
         modelName: workspace.modelName,
         protocol: workspace.protocol,
-        aspectRatio: workspace.aspectRatio,
+        aspectRatio: task.aspectRatio ?? workspace.aspectRatio,
         imageSize: workspace.imageSize,
+        seed: task.seed,
         inputImageNames: inputImages.map((image) => image.name),
         createdAt: task.createdAt
       });
@@ -614,10 +680,34 @@ export default function App() {
             <span>提示词</span>
             <textarea
               onChange={(event) => updateWorkspace({ prompt: event.currentTarget.value })}
-              placeholder="请输入你想生成或修改的内容"
+              placeholder={
+                workspace.promptMode === "queue"
+                  ? "一行一个提示词，例如：\n电商主图\n侧身姿势图\n细节特写图"
+                  : "请输入你想生成或修改的内容"
+              }
               value={workspace.prompt}
             />
+            <span className="field-hint">
+              {workspace.promptMode === "queue" ? `已识别 ${promptQueue.length} 条提示词，将按顺序逐张生成。` : "同一个提示词可一次生成多张。"}
+            </span>
           </label>
+
+          <div className="segmented-control" role="group" aria-label="生成模式">
+            <button
+              className={workspace.promptMode === "count" ? "is-active" : ""}
+              onClick={() => updateWorkspace({ promptMode: "count" })}
+              type="button"
+            >
+              同提示词 N 张
+            </button>
+            <button
+              className={workspace.promptMode === "queue" ? "is-active" : ""}
+              onClick={() => updateWorkspace({ promptMode: "queue" })}
+              type="button"
+            >
+              多提示词队列
+            </button>
+          </div>
 
           <label className="field">
             <span>Base URL</span>
@@ -677,6 +767,13 @@ export default function App() {
                   </option>
                 ))}
               </select>
+              <span className="field-hint">
+                {workspace.aspectRatio === "Adaptive"
+                  ? effectiveAspectRatio === "Adaptive"
+                    ? "自适应：未上传参考图时由上游决定比例。"
+                    : `自适应：将跟随第一张参考图，按 ${effectiveAspectRatio} 生成。`
+                  : "手动比例会优先生效。"}
+              </span>
             </label>
 
             <label className="field">
@@ -696,8 +793,9 @@ export default function App() {
 
           <div className="field-row single-field-row">
             <label className="field">
-              <span>数量</span>
+              <span>{workspace.promptMode === "queue" ? "队列条数" : "数量"}</span>
               <input
+                disabled={workspace.promptMode === "queue"}
                 max={10}
                 min={1}
                 onChange={(event) =>
@@ -706,9 +804,54 @@ export default function App() {
                   })
                 }
                 type="number"
-                value={workspace.concurrency}
+                value={workspace.promptMode === "queue" ? promptQueue.length : workspace.concurrency}
               />
+              <span className="field-hint">
+                {workspace.promptMode === "queue" ? "队列模式按有效提示词行数生成，每行一张。" : `本次会创建 ${plannedTaskCount} 个生成任务。`}
+              </span>
             </label>
+          </div>
+
+          <div className="advanced-box">
+            <button className="advanced-toggle" onClick={() => setIsAdvancedOpen((current) => !current)} type="button">
+              <span>
+                <SlidersHorizontal size={16} />
+                高级参数
+              </span>
+              <small>{workspace.seedLocked ? `Seed ${workspace.seed}` : "随机 Seed"}</small>
+            </button>
+
+            {isAdvancedOpen ? (
+              <div className="advanced-content">
+                <label className="field">
+                  <span>Seed</span>
+                  <div className="inline-control">
+                    <input
+                      min={0}
+                      onChange={(event) =>
+                        updateWorkspace({ seed: Math.max(0, Number.parseInt(event.currentTarget.value, 10) || 0) })
+                      }
+                      type="number"
+                      value={workspace.seed}
+                    />
+                    <button
+                      aria-label={workspace.seedLocked ? "解除 Seed 锁定" : "锁定 Seed"}
+                      className={`icon-button control-button ${workspace.seedLocked ? "is-active" : ""}`}
+                      onClick={() => updateWorkspace({ seedLocked: !workspace.seedLocked })}
+                      title={workspace.seedLocked ? "已锁定 Seed" : "使用随机 Seed"}
+                      type="button"
+                    >
+                      {workspace.seedLocked ? <Lock size={17} /> : <Unlock size={17} />}
+                    </button>
+                  </div>
+                  <span className="field-hint">
+                    {workspace.seedLocked
+                      ? "锁定后批量任务会使用 seed、seed+1、seed+2，方便复现系列图。"
+                      : "未锁定时每次运行会自动生成新的起始 seed。"}
+                  </span>
+                </label>
+              </div>
+            ) : null}
           </div>
 
           <button className="run-button" disabled={!canGenerate} onClick={() => void runGenerate()} type="button">
@@ -817,16 +960,18 @@ export default function App() {
                         <img alt="" src={task.imageDataUrl} />
                       ) : task.status === "failed" ? (
                         <X size={22} />
+                      ) : task.status === "queued" ? (
+                        <span className="queued-dot" />
                       ) : (
                         <Loader2 className="spin" size={22} />
                       )}
                     </span>
                     <span className="generation-task-copy">
                       <strong>
-                        {task.status === "success" ? "已完成" : task.status === "failed" ? "生成失败" : "生成中"}
+                        {task.status === "success" ? "已完成" : task.status === "failed" ? "生成失败" : task.status === "queued" ? "排队中" : "生成中"}
                         {task.status === "success" ? <CheckCircle2 size={14} /> : null}
                       </strong>
-                      <small>{task.message}</small>
+                      <small>{task.prompt ? `${task.message} · ${task.prompt}` : task.message}</small>
                     </span>
                   </button>
                 ))}

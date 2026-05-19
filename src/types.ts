@@ -17,6 +17,7 @@ export type AspectRatio =
   | "9:16";
 
 export type ImageSize = "1K" | "2K" | "4K";
+export type PromptMode = "count" | "queue";
 
 export interface InputImage {
   id: string;
@@ -25,6 +26,8 @@ export interface InputImage {
   data: string;
   dataUrl: string;
   size: number;
+  width?: number;
+  height?: number;
 }
 
 export interface WorkspaceState {
@@ -37,6 +40,9 @@ export interface WorkspaceState {
   aspectRatio: AspectRatio;
   imageSize: ImageSize;
   concurrency: number;
+  promptMode: PromptMode;
+  seed: number;
+  seedLocked: boolean;
 }
 
 export interface ProviderModelOption {
@@ -57,6 +63,7 @@ export interface HistoryItem {
   protocol: ProviderProtocol;
   aspectRatio: AspectRatio;
   imageSize: ImageSize;
+  seed?: number;
   inputImageNames: string[];
   createdAt: string;
 }
