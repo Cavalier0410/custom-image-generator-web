@@ -1,9 +1,11 @@
 import {
   CheckCircle2,
+  Copy,
   CreditCard,
   Download,
   Eye,
   EyeOff,
+  ExternalLink,
   Image as ImageIcon,
   Loader2,
   Lock,
@@ -11,6 +13,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Search,
   SlidersHorizontal,
   Sun,
   Trash2,
@@ -18,14 +21,17 @@ import {
   UploadCloud,
   X
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
 import { fetchProviderModels, generateImage, toUserFacingError } from "./api";
+import { CASE_LIBRARY_SOURCE, loadCaseLibrary, loadCasePrompts, type CaseLibraryItem, type CasePromptMap } from "./caseLibrary";
 import { createGenerationPlan, parsePromptQueue, resolveEffectiveAspectRatio } from "./generationPlan";
 import { loadStoredHistory, saveStoredHistory } from "./historyStore";
 import type { AspectRatio, HistoryItem, ImageSize, InputImage, ProviderModelOption, WorkspaceState } from "./types";
 import { downloadHistoryAsZip } from "./zipArchive";
 
 const WORKSPACE_KEY = "custom-image-workspace-v2";
+const ANNOUNCEMENT_VERSION = "2026-05-20";
+const ANNOUNCEMENT_STORAGE_KEY = "image-studio-announcement-version";
 const INPUT_IMAGE_LIMIT = 12;
 const HISTORY_LIMIT = 40;
 const DEFAULT_BASE_URL = "https://api.lts4ai.com";
@@ -50,8 +56,26 @@ const ASPECT_RATIO_OPTIONS: Array<{ value: AspectRatio; label: string }> = [
 ];
 
 const IMAGE_SIZES: ImageSize[] = ["4K", "2K", "1K"];
+const ALL_CASE_CATEGORY = "全部";
+
+const CASE_CATEGORY_LABELS: Record<string, string> = {
+  "Architecture & Spaces": "建筑空间",
+  "Brand & Logos": "品牌标志",
+  "Characters & People": "角色人物",
+  "Charts & Infographics": "信息图表",
+  "Documents & Publishing": "文档出版",
+  "History & Classical Themes": "历史古风",
+  "Illustration & Art": "插画艺术",
+  "Other Use Cases": "其他案例",
+  "Photography & Realism": "摄影写实",
+  "Posters & Typography": "海报字体",
+  "Products & E-commerce": "产品电商",
+  "Scenes & Storytelling": "场景叙事",
+  "UI & Interfaces": "界面设计"
+};
 
 type GenerationTaskStatus = "queued" | "running" | "success" | "failed";
+type ActiveView = "studio" | "cases";
 
 interface GenerationTask {
   id: string;
@@ -103,6 +127,14 @@ function readStoredWorkspace(): WorkspaceState {
     };
   } catch {
     return DEFAULT_WORKSPACE;
+  }
+}
+
+function hasSeenAnnouncementVersion() {
+  try {
+    return localStorage.getItem(ANNOUNCEMENT_STORAGE_KEY) === ANNOUNCEMENT_VERSION;
+  } catch {
+    return false;
   }
 }
 
@@ -190,6 +222,35 @@ function compactError(error: unknown) {
   return toUserFacingError(error);
 }
 
+function compactPrompt(prompt: string, maxLength = 150) {
+  const compacted = prompt.replace(/\s+/g, " ").trim();
+  if (compacted.length <= maxLength) {
+    return compacted;
+  }
+  return `${compacted.slice(0, maxLength).trim()}...`;
+}
+
+function localizeCaseCategory(category: string) {
+  return CASE_CATEGORY_LABELS[category] ?? category;
+}
+
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+}
+
 function pickDefaultModel(models: ProviderModelOption[], currentModelName: string) {
   const currentModel = models.find((model) => model.id === currentModelName);
   if (currentModel) {
@@ -199,7 +260,99 @@ function pickDefaultModel(models: ProviderModelOption[], currentModelName: strin
   return models[0] ?? null;
 }
 
+interface CaseLibraryDetailPanelProps {
+  caseItem: CaseLibraryItem;
+  prompt: string;
+  copiedCaseId: number | null;
+  canUsePrompt: boolean;
+  isCasePromptLoading: boolean;
+  headerAction?: ReactNode;
+  onCopy: (caseItem: CaseLibraryItem) => Promise<void>;
+  onApply: (caseItem: CaseLibraryItem) => void;
+}
+
+function CaseLibraryDetailPanel({
+  caseItem,
+  prompt,
+  copiedCaseId,
+  canUsePrompt,
+  isCasePromptLoading,
+  headerAction,
+  onCopy,
+  onApply
+}: CaseLibraryDetailPanelProps) {
+  return (
+    <>
+      <div className="case-detail-media">
+        <img alt={caseItem.imageAlt} decoding="async" fetchPriority="high" src={caseItem.image} />
+      </div>
+      <div className="case-detail-content">
+        <div className="case-detail-head">
+          <div className="case-detail-meta">
+            <span>案例 #{caseItem.id}</span>
+            <span>{localizeCaseCategory(caseItem.category)}</span>
+          </div>
+          {headerAction}
+        </div>
+        <h2>{caseItem.title}</h2>
+        <p>{compactPrompt(caseItem.promptPreview, 180)}</p>
+        <div className="case-tags">
+          {caseItem.tags.slice(0, 8).map((tag) => (
+            <span key={`${caseItem.id}-${tag}`}>{tag}</span>
+          ))}
+        </div>
+        <div className="case-detail-actions">
+          <button
+            className="text-button"
+            disabled={!canUsePrompt || isCasePromptLoading}
+            onClick={() => void onCopy(caseItem)}
+            type="button"
+          >
+            <Copy size={17} />
+            {copiedCaseId === caseItem.id ? "已复制" : "复制提示词"}
+          </button>
+          <button
+            className="text-button is-primary"
+            disabled={!canUsePrompt || isCasePromptLoading}
+            onClick={() => onApply(caseItem)}
+            type="button"
+          >
+            <Play size={17} />
+            套用到工作台
+          </button>
+          <a className="text-button" href={caseItem.githubUrl} rel="noreferrer" target="_blank">
+            <ExternalLink size={17} />
+            源案例
+          </a>
+        </div>
+        <div className="case-prompt-panel">
+          <div>
+            <strong>提示词</strong>
+            {caseItem.sourceUrl ? (
+              <a href={caseItem.sourceUrl} rel="noreferrer" target="_blank">
+                {caseItem.sourceLabel}
+              </a>
+            ) : (
+              <span>{caseItem.sourceLabel}</span>
+            )}
+          </div>
+          {canUsePrompt ? (
+            <pre>{prompt}</pre>
+          ) : (
+            <div className="case-prompt-loading">
+              <Loader2 className={isCasePromptLoading ? "spin" : ""} size={18} />
+              <span>{isCasePromptLoading ? "正在加载完整提示词..." : "提示词暂时不可用。"}</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 export default function App() {
+  const [activeView, setActiveView] = useState<ActiveView>("studio");
+  const [isUpdateAnnouncementOpen, setIsUpdateAnnouncementOpen] = useState(() => !hasSeenAnnouncementVersion());
   const [workspace, setWorkspace] = useState<WorkspaceState>(readStoredWorkspace);
   const [modelOptions, setModelOptions] = useState<ProviderModelOption[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -216,11 +369,24 @@ export default function App() {
   const [isApiKeyVisible, setIsApiKeyVisible] = useState(false);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<HistoryItem | null>(null);
+  const [caseLibraryItems, setCaseLibraryItems] = useState<CaseLibraryItem[]>([]);
+  const [caseLibraryCategories, setCaseLibraryCategories] = useState<string[]>([]);
+  const [casePromptsById, setCasePromptsById] = useState<CasePromptMap>({});
+  const [caseLibraryTotal, setCaseLibraryTotal] = useState(CASE_LIBRARY_SOURCE.totalCases);
+  const [isCaseLibraryLoading, setIsCaseLibraryLoading] = useState(true);
+  const [isCasePromptLoading, setIsCasePromptLoading] = useState(false);
+  const [caseLibraryError, setCaseLibraryError] = useState("");
+  const [caseLibraryQuery, setCaseLibraryQuery] = useState("");
+  const [selectedCaseCategory, setSelectedCaseCategory] = useState(ALL_CASE_CATEGORY);
+  const [selectedCaseId, setSelectedCaseId] = useState<number | null>(null);
+  const [isMobileCaseDetailOpen, setIsMobileCaseDetailOpen] = useState(false);
+  const [copiedCaseId, setCopiedCaseId] = useState<number | null>(null);
   const [fileAction, setFileAction] = useState<{ mode: "append" | "replace"; index: number | null }>({
     mode: "append",
     index: null
   });
   const modelLoadRequestRef = useRef(0);
+  const casePromptLoadAttemptedRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedInputImage = inputImages[selectedInputIndex] ?? null;
@@ -235,6 +401,21 @@ export default function App() {
     () => modelOptions.find((model) => model.id === workspace.modelName) ?? null,
     [modelOptions, workspace.modelName]
   );
+  const filteredCaseLibrary = useMemo(() => {
+    const query = caseLibraryQuery.trim().toLowerCase();
+    return caseLibraryItems.filter((caseItem) => {
+      const matchesCategory = selectedCaseCategory === ALL_CASE_CATEGORY || caseItem.category === selectedCaseCategory;
+      const haystack =
+        `${caseItem.id} ${caseItem.title} ${caseItem.category} ${caseItem.sourceLabel} ${caseItem.tags.join(" ")} ${caseItem.promptPreview}`.toLowerCase();
+      return matchesCategory && (!query || haystack.includes(query));
+    });
+  }, [caseLibraryItems, caseLibraryQuery, selectedCaseCategory]);
+  const selectedCaseItem = useMemo(
+    () => caseLibraryItems.find((caseItem) => caseItem.id === selectedCaseId) ?? filteredCaseLibrary[0] ?? caseLibraryItems[0] ?? null,
+    [caseLibraryItems, filteredCaseLibrary, selectedCaseId]
+  );
+  const selectedCasePrompt = selectedCaseItem ? (casePromptsById[selectedCaseItem.id] ?? selectedCaseItem.prompt ?? "") : "";
+  const canUseSelectedCasePrompt = selectedCasePrompt.trim().length > 0;
   const promptQueue = useMemo(() => parsePromptQueue(workspace.prompt), [workspace.prompt]);
   const plannedTaskCount =
     workspace.promptMode === "queue"
@@ -251,9 +432,62 @@ export default function App() {
     workspace.baseUrl.trim().length > 0 &&
     workspace.modelName.trim().length > 0 &&
     modelOptions.some((model) => model.id === workspace.modelName);
+  const visibleStatusMessage =
+    activeView === "cases"
+      ? statusMessage.startsWith("已复制案例") || statusMessage.startsWith("已将案例")
+        ? statusMessage
+        : isCaseLibraryLoading
+          ? "案例库加载中..."
+          : caseLibraryError || `案例库就绪：${caseLibraryTotal || caseLibraryItems.length} 个案例。`
+      : statusMessage;
+  const isStatusBusy = activeView === "cases" ? isCaseLibraryLoading : isGenerating || isLoadingModels;
 
   const updateWorkspace = useCallback((patch: Partial<WorkspaceState>) => {
     setWorkspace((current) => ({ ...current, ...patch }));
+  }, []);
+
+  const copyCasePrompt = useCallback(async (caseItem: CaseLibraryItem) => {
+    const prompt = casePromptsById[caseItem.id] ?? caseItem.prompt ?? "";
+    if (!prompt.trim()) {
+      setStatusMessage("提示词仍在加载，请稍后再试。");
+      return;
+    }
+
+    try {
+      await copyTextToClipboard(prompt);
+      setCopiedCaseId(caseItem.id);
+      setStatusMessage(`已复制案例「${caseItem.title}」的提示词。`);
+      window.setTimeout(() => {
+        setCopiedCaseId((current) => (current === caseItem.id ? null : current));
+      }, 1800);
+    } catch {
+      setStatusMessage("复制失败，请在详情里手动选中提示词。");
+    }
+  }, []);
+
+  const applyCasePrompt = useCallback(
+    (caseItem: CaseLibraryItem) => {
+      const prompt = casePromptsById[caseItem.id] ?? caseItem.prompt ?? "";
+      if (!prompt.trim()) {
+        setStatusMessage("提示词仍在加载，请稍后再试。");
+        return;
+      }
+
+      updateWorkspace({
+        prompt,
+        promptMode: "count"
+      });
+      setActiveView("studio");
+      setStatusMessage(`已将案例「${caseItem.title}」套用到工作台。`);
+    },
+    [casePromptsById, updateWorkspace]
+  );
+
+  const openCaseDetail = useCallback((caseId: number) => {
+    setSelectedCaseId(caseId);
+    if (window.matchMedia("(max-width: 900px)").matches) {
+      setIsMobileCaseDetailOpen(true);
+    }
   }, []);
 
   const loadModels = useCallback(
@@ -316,6 +550,68 @@ export default function App() {
   useEffect(() => {
     let isActive = true;
 
+    loadCaseLibrary()
+      .then((data) => {
+        if (!isActive) {
+          return;
+        }
+        setCaseLibraryItems(data.cases);
+        setCaseLibraryCategories(data.categories);
+        setCaseLibraryTotal(data.source.totalCases);
+        setSelectedCaseId(data.cases[0]?.id ?? null);
+        setCaseLibraryError("");
+      })
+      .catch(() => {
+        if (isActive) {
+          setCaseLibraryError("案例库加载失败，请稍后重试。");
+        }
+      })
+      .finally(() => {
+        if (isActive) {
+          setIsCaseLibraryLoading(false);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeView !== "cases" || caseLibraryItems.length === 0 || casePromptLoadAttemptedRef.current) {
+      return;
+    }
+
+    let isActive = true;
+    casePromptLoadAttemptedRef.current = true;
+    setIsCasePromptLoading(true);
+
+    loadCasePrompts()
+      .then((prompts) => {
+        if (isActive) {
+          setCasePromptsById(prompts);
+        }
+      })
+      .catch(() => {
+        if (isActive) {
+          setStatusMessage("案例提示词加载失败，请稍后重试。");
+          casePromptLoadAttemptedRef.current = false;
+        }
+      })
+      .finally(() => {
+        if (isActive) {
+          setIsCasePromptLoading(false);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [activeView, caseLibraryItems.length]);
+
+  useEffect(() => {
+    let isActive = true;
+
     loadStoredHistory(HISTORY_LIMIT)
       .then((storedHistory) => {
         if (!isActive) {
@@ -373,6 +669,49 @@ export default function App() {
       updateWorkspace({ protocol: selectedModel.protocol });
     }
   }, [selectedModel, updateWorkspace, workspace.protocol]);
+
+  useEffect(() => {
+    if (filteredCaseLibrary.length === 0) {
+      setSelectedCaseId(null);
+      return;
+    }
+
+    setSelectedCaseId((current) =>
+      current && filteredCaseLibrary.some((caseItem) => caseItem.id === current) ? current : filteredCaseLibrary[0].id
+    );
+  }, [filteredCaseLibrary]);
+
+  useEffect(() => {
+    if (!isMobileCaseDetailOpen) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsMobileCaseDetailOpen(false);
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isMobileCaseDetailOpen]);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 900px)");
+    const handleChange = (event: MediaQueryListEvent) => {
+      if (!event.matches) {
+        setIsMobileCaseDetailOpen(false);
+      }
+    };
+
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, []);
 
   useEffect(() => {
     setSelectedInputIndex((current) => {
@@ -620,6 +959,25 @@ export default function App() {
     setStatusMessage(`已打包下载 ${selectedItems.length} 张图片。`);
   };
 
+  const dismissUpdateAnnouncement = useCallback(() => {
+    setIsUpdateAnnouncementOpen(false);
+    try {
+      localStorage.setItem(ANNOUNCEMENT_STORAGE_KEY, ANNOUNCEMENT_VERSION);
+    } catch {
+      // Storage can be unavailable in private or restricted browser sessions.
+    }
+  }, []);
+
+  const showCaseLibraryFromAnnouncement = () => {
+    dismissUpdateAnnouncement();
+    setActiveView("cases");
+  };
+
+  const copyAssistantWechat = () => {
+    void navigator.clipboard?.writeText("Ctikki888").catch(() => undefined);
+    setStatusMessage("小助手微信：Ctikki888");
+  };
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -633,19 +991,40 @@ export default function App() {
           </div>
         </a>
 
-        <a
-          className="topup-button"
-          href="https://pay.ldxp.cn/shop/AMTT76KG"
-          rel="noreferrer"
-          target="_blank"
-        >
-          <CreditCard size={17} />
-          充值
-        </a>
+        <div className="topbar-actions">
+          <a
+            className="topup-button"
+            href="https://pay.ldxp.cn/shop/AMTT76KG"
+            rel="noreferrer"
+            target="_blank"
+          >
+            <CreditCard size={17} />
+            充值
+          </a>
+
+          <nav className="view-tabs" aria-label="主功能标签">
+            <button
+              className={activeView === "studio" ? "is-active" : ""}
+              onClick={() => setActiveView("studio")}
+              type="button"
+            >
+              <SlidersHorizontal size={16} />
+              工作台
+            </button>
+            <button
+              className={activeView === "cases" ? "is-active" : ""}
+              onClick={() => setActiveView("cases")}
+              type="button"
+            >
+              <ImageIcon size={16} />
+              案例专区
+            </button>
+          </nav>
+        </div>
 
         <p className="status-pill" aria-live="polite">
-          {isGenerating || isLoadingModels ? <Loader2 className="spin" size={16} /> : null}
-          {statusMessage}
+          {isStatusBusy ? <Loader2 className="spin" size={16} /> : null}
+          <span className="status-text">{visibleStatusMessage}</span>
         </p>
 
         <button
@@ -659,6 +1038,7 @@ export default function App() {
         </button>
       </header>
 
+      {activeView === "studio" ? (
       <main className="workbench" aria-label="Image Studio 工作台">
         <section className="panel params-panel" aria-label="参数">
           <div className="section-heading">
@@ -1095,6 +1475,199 @@ export default function App() {
           </aside>
         </section>
       </main>
+      ) : (
+        <main className="case-library-page" aria-label="案例专区">
+          <section className="case-library-main" aria-label="案例浏览">
+            <div className="case-library-hero">
+              <div>
+                <p className="eyebrow">Prompt gallery</p>
+                <h2>案例专区</h2>
+                <p>
+                  收录 {CASE_LIBRARY_SOURCE.name} 画廊案例，点击卡片查看详情，一键复制提示词或套用到生图工作台。
+                </p>
+              </div>
+              <a className="case-source-link" href={CASE_LIBRARY_SOURCE.sourceRepository} rel="noreferrer" target="_blank">
+                GitHub 项目
+                <ExternalLink size={16} />
+              </a>
+            </div>
+
+            <div className="case-library-toolbar">
+              <label className="case-search" aria-label="搜索案例">
+                <Search size={18} />
+                <input
+                  onChange={(event) => setCaseLibraryQuery(event.currentTarget.value)}
+                  placeholder="搜索案例、提示词、来源..."
+                  type="search"
+                  value={caseLibraryQuery}
+                />
+              </label>
+              <div className="case-count">
+                <strong>{filteredCaseLibrary.length}</strong>
+                <span>/ {caseLibraryTotal || caseLibraryItems.length} 个案例</span>
+              </div>
+            </div>
+
+            <div className="case-category-row" aria-label="案例分类">
+              {[ALL_CASE_CATEGORY, ...caseLibraryCategories].map((category) => (
+                <button
+                  className={selectedCaseCategory === category ? "is-active" : ""}
+                  key={category}
+                  onClick={() => setSelectedCaseCategory(category)}
+                  type="button"
+                >
+                  {category === ALL_CASE_CATEGORY ? ALL_CASE_CATEGORY : localizeCaseCategory(category)}
+                </button>
+              ))}
+            </div>
+
+            {isCaseLibraryLoading ? (
+              <div className="empty-case-library">
+                <Loader2 className="spin" size={34} />
+                <strong>正在加载案例库</strong>
+                <span>读取 awesome-gpt-image-2 的完整案例数据。</span>
+              </div>
+            ) : caseLibraryError ? (
+              <div className="empty-case-library">
+                <X size={34} />
+                <strong>{caseLibraryError}</strong>
+                <span>请确认本地 /cases-index.json 可以访问。</span>
+              </div>
+            ) : filteredCaseLibrary.length > 0 ? (
+              <div className="case-library-grid">
+                {filteredCaseLibrary.map((caseItem, index) => (
+                  <button
+                    className={`case-card ${selectedCaseItem?.id === caseItem.id ? "is-active" : ""}`}
+                    key={caseItem.id}
+                    onClick={() => openCaseDetail(caseItem.id)}
+                    type="button"
+                  >
+                    <span className="case-image-wrap">
+                      <img
+                        alt={caseItem.imageAlt}
+                        decoding="async"
+                        fetchPriority={index < 4 ? "high" : "auto"}
+                        loading="lazy"
+                        src={caseItem.thumbImage}
+                      />
+                      <span>#{caseItem.id}</span>
+                    </span>
+                    <span className="case-card-body">
+                      <strong>{caseItem.title}</strong>
+                      <small>{localizeCaseCategory(caseItem.category)}</small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-case-library">
+                <Search size={34} />
+                <strong>没有找到匹配案例</strong>
+                <span>换个关键词或分类试试。</span>
+              </div>
+            )}
+          </section>
+
+          <aside className="case-library-detail" aria-label="案例详情">
+            {selectedCaseItem ? (
+              <CaseLibraryDetailPanel
+                canUsePrompt={canUseSelectedCasePrompt}
+                caseItem={selectedCaseItem}
+                copiedCaseId={copiedCaseId}
+                isCasePromptLoading={isCasePromptLoading}
+                onApply={applyCasePrompt}
+                onCopy={copyCasePrompt}
+                prompt={selectedCasePrompt}
+              />
+            ) : (
+              <div className="empty-case-detail">
+                <ImageIcon size={36} />
+                <strong>选择一个案例</strong>
+                <span>点击左侧卡片查看提示词和生成入口。</span>
+              </div>
+            )}
+          </aside>
+        </main>
+      )}
+
+      {activeView === "cases" && selectedCaseItem && isMobileCaseDetailOpen ? (
+        <div
+          className="case-detail-sheet-backdrop"
+          onClick={() => setIsMobileCaseDetailOpen(false)}
+          role="presentation"
+        >
+          <section
+            aria-label="案例移动端详情"
+            className="case-detail-sheet"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <CaseLibraryDetailPanel
+              canUsePrompt={canUseSelectedCasePrompt}
+              caseItem={selectedCaseItem}
+              copiedCaseId={copiedCaseId}
+              headerAction={
+                <button
+                  aria-label="关闭案例详情"
+                  className="icon-button case-detail-sheet-close"
+                  onClick={() => setIsMobileCaseDetailOpen(false)}
+                  type="button"
+                >
+                  <X size={18} />
+                </button>
+              }
+              isCasePromptLoading={isCasePromptLoading}
+              onApply={applyCasePrompt}
+              onCopy={copyCasePrompt}
+              prompt={selectedCasePrompt}
+            />
+          </section>
+        </div>
+      ) : null}
+
+      {isUpdateAnnouncementOpen ? (
+        <div className="release-announcement-backdrop" onClick={dismissUpdateAnnouncement} role="presentation">
+          <section
+            aria-labelledby="release-announcement-title"
+            aria-modal="true"
+            className="release-announcement-card"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <button
+              aria-label="关闭更新公告"
+              className="icon-button release-announcement-close"
+              onClick={dismissUpdateAnnouncement}
+              type="button"
+            >
+              <X size={18} />
+            </button>
+            <p className="release-announcement-kicker">Image Studio Release</p>
+            <h2 id="release-announcement-title">5.20更新公告</h2>
+            <div className="release-announcement-copy">
+              <p>
+                接入了全球最强生图模型 <strong>gptimage2</strong>，收集了全网{" "}
+                <strong>442 条玩法案例</strong>，一键复刻，立即赚钱。
+              </p>
+              <p>
+                欢迎大家反馈 bug 或提供优化意见，联系小助手 VX：<strong>Ctikki888</strong>{" "}
+                加群一起交流。
+              </p>
+            </div>
+            <div className="release-announcement-actions">
+              <button className="release-announcement-primary" onClick={showCaseLibraryFromAnnouncement} type="button">
+                查看玩法案例
+              </button>
+              <button className="release-announcement-secondary" onClick={copyAssistantWechat} type="button">
+                <Copy size={16} />
+                复制微信
+              </button>
+              <button className="release-announcement-secondary" onClick={dismissUpdateAnnouncement} type="button">
+                我知道了
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {lightboxImage ? (
         <div className="lightbox" onClick={() => setLightboxImage(null)} role="dialog" aria-label="图片预览">

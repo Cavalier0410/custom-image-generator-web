@@ -3,7 +3,7 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/((?!_vercel/image).*)",
       "destination": "/index.html"
     }
   ]
