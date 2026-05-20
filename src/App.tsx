@@ -41,7 +41,7 @@ const LEGACY_DEFAULT_PROMPTS = new Set([
 ]);
 
 const ASPECT_RATIO_OPTIONS: Array<{ value: AspectRatio; label: string }> = [
-  { value: "Adaptive", label: "自适应" },
+  { value: "Adaptive", label: "自动" },
   { value: "1:1", label: "正方形 1:1" },
   { value: "16:9", label: "横屏 16:9" },
   { value: "21:9", label: "超宽屏 21:9" },
@@ -155,6 +155,67 @@ function readImageDimensions(dataUrl: string): Promise<{ width: number; height: 
   });
 }
 
+const INPUT_IMAGE_COMPRESSION_THRESHOLD_BYTES = 3 * 1024 * 1024;
+const INPUT_IMAGE_MAX_DIMENSION = 2560;
+const INPUT_IMAGE_JPEG_QUALITY = 0.86;
+
+function canvasToBlob(canvas: HTMLCanvasElement, mimeType: string, quality?: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) {
+          resolve(blob);
+          return;
+        }
+        reject(new Error("Image compression failed."));
+      },
+      mimeType,
+      quality
+    );
+  });
+}
+
+async function compressInputImage(file: File): Promise<File> {
+  if (file.size <= INPUT_IMAGE_COMPRESSION_THRESHOLD_BYTES) {
+    return file;
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error(`Failed to read image: ${file.name}`));
+      image.src = objectUrl;
+    });
+
+    const scale = Math.min(1, INPUT_IMAGE_MAX_DIMENSION / Math.max(image.naturalWidth, image.naturalHeight));
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return file;
+    }
+
+    context.drawImage(image, 0, 0, width, height);
+    const blob = await canvasToBlob(canvas, "image/jpeg", INPUT_IMAGE_JPEG_QUALITY);
+    if (blob.size >= file.size) {
+      return file;
+    }
+
+    const baseName = file.name.replace(/\.[^.]+$/, "") || "input";
+    return new File([blob], `${baseName}-compressed.jpg`, {
+      type: "image/jpeg",
+      lastModified: Date.now()
+    });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 function fileToInputImage(file: File): Promise<InputImage> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -176,6 +237,10 @@ function fileToInputImage(file: File): Promise<InputImage> {
     };
     reader.readAsDataURL(file);
   });
+}
+
+async function fileToCompressedInputImage(file: File): Promise<InputImage> {
+  return fileToInputImage(await compressInputImage(file));
 }
 
 function readableSize(bytes: number) {
@@ -368,6 +433,7 @@ export default function App() {
   const [statusMessage, setStatusMessage] = useState("工作台就绪。");
   const [isApiKeyVisible, setIsApiKeyVisible] = useState(false);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+  const [isHistorySidebarOpen, setIsHistorySidebarOpen] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<HistoryItem | null>(null);
   const [caseLibraryItems, setCaseLibraryItems] = useState<CaseLibraryItem[]>([]);
   const [caseLibraryCategories, setCaseLibraryCategories] = useState<string[]>([]);
@@ -477,6 +543,7 @@ export default function App() {
         prompt,
         promptMode: "count"
       });
+      setIsMobileCaseDetailOpen(false);
       setActiveView("studio");
       setStatusMessage(`已将案例「${caseItem.title}」套用到工作台。`);
     },
@@ -744,7 +811,7 @@ export default function App() {
 
     try {
       const nextImages = await Promise.all(
-        imageFiles.slice(0, action.mode === "replace" ? 1 : INPUT_IMAGE_LIMIT).map(fileToInputImage)
+        imageFiles.slice(0, action.mode === "replace" ? 1 : INPUT_IMAGE_LIMIT).map(fileToCompressedInputImage)
       );
       setInputImages((current) => {
         if (action.mode === "replace" && action.index !== null) {
@@ -1039,6 +1106,33 @@ export default function App() {
       </header>
 
       {activeView === "studio" ? (
+        <section className={`motion-console ${isGenerating ? "is-live" : ""}`} aria-label="创意引擎状态">
+          <div className="motion-console-signal" aria-hidden="true">
+            <span />
+          </div>
+          <div className="motion-console-copy">
+            <span>Creative engine</span>
+            <strong>{isGenerating ? "正在把提示词推入生成队列" : "准备生成下一组画面"}</strong>
+          </div>
+          <dl className="motion-console-stats" aria-label="当前生成设置">
+            <div>
+              <dt>Tasks</dt>
+              <dd>{String(plannedTaskCount).padStart(2, "0")}</dd>
+            </div>
+            <div>
+              <dt>Frame</dt>
+              <dd>{effectiveAspectRatio === "Adaptive" ? "自动" : effectiveAspectRatio}</dd>
+            </div>
+            <div>
+              <dt>Quality</dt>
+              <dd>{workspace.imageSize}</dd>
+            </div>
+          </dl>
+        </section>
+      ) : null}
+
+      {activeView === "studio" ? (
+      <div className={`workbench-shell ${isHistorySidebarOpen ? "is-history-open" : ""}`}>
       <main className="workbench" aria-label="Image Studio 工作台">
         <section className="panel params-panel" aria-label="参数">
           <div className="section-heading">
@@ -1145,7 +1239,7 @@ export default function App() {
             </div>
           </label>
 
-          <div className="field-row">
+          <div className="field-row compact-setting-row">
             <label className="field">
               <span>比例</span>
               <select
@@ -1158,13 +1252,6 @@ export default function App() {
                   </option>
                 ))}
               </select>
-              <span className="field-hint">
-                {workspace.aspectRatio === "Adaptive"
-                  ? effectiveAspectRatio === "Adaptive"
-                    ? "自适应：未上传参考图时由上游决定比例。"
-                    : `自适应：将跟随第一张参考图，按 ${effectiveAspectRatio} 生成。`
-                  : "手动比例会优先生效。"}
-              </span>
             </label>
 
             <label className="field">
@@ -1180,6 +1267,13 @@ export default function App() {
                 ))}
               </select>
             </label>
+            <span className="field-hint compact-setting-hint">
+              {workspace.aspectRatio === "Adaptive"
+                ? effectiveAspectRatio === "Adaptive"
+                  ? "自动：未上传参考图时由上游决定比例。"
+                  : `自动：跟随第一张参考图，按 ${effectiveAspectRatio} 生成。`
+                : "手动比例会优先生效。"}
+            </span>
           </div>
 
           <div className="field-row single-field-row">
@@ -1403,78 +1497,101 @@ export default function App() {
             )}
           </div>
 
-          <aside className="panel history-panel" aria-label="历史记录">
-            <div className={`history-head ${isManagingHistory ? "is-managing" : ""}`}>
-              <div className="history-title-row">
-                <div className="history-title">
-                  <h2>历史</h2>
-                  <span>{isManagingHistory ? `已选 ${selectedHistoryIds.length}` : isHistoryLoaded ? `${history.length} 张` : "读取中"}</span>
-                </div>
-                {!isManagingHistory ? (
-                  <button className="text-button small" onClick={() => setIsManagingHistory(true)} type="button">
-                    管理
-                  </button>
-                ) : null}
-              </div>
-              {isManagingHistory ? (
-                <div className="history-actions" aria-label="历史批量操作">
-                  <button
-                    aria-label="下载选中"
-                    className="icon-button control-button"
-                    disabled={selectedHistoryIds.length === 0}
-                    onClick={downloadSelectedHistory}
-                    title="下载选中"
-                    type="button"
-                  >
-                    <Download size={17} />
-                  </button>
-                  <button
-                    className="icon-button control-button"
-                    disabled={selectedHistoryIds.length === 0}
-                    onClick={deleteSelectedHistory}
-                    title="删除选中"
-                    type="button"
-                  >
-                    <Trash2 size={17} />
-                  </button>
-                  <button className="icon-button control-button" onClick={() => setIsManagingHistory(false)} title="完成" type="button">
-                    <X size={17} />
-                  </button>
-                </div>
-              ) : null}
-            </div>
-
-            <div className="history-list">
-              {!isHistoryLoaded ? (
-                <div className="empty-history">正在读取历史</div>
-              ) : history.length === 0 ? (
-                <div className="empty-history">暂无记录</div>
-              ) : (
-                history.map((item) => (
-                  <button
-                    aria-label={`查看 ${formatTime(item.createdAt)}`}
-                    className={`history-tile ${item.id === visibleHistoryItem?.id ? "is-active" : ""} ${
-                      selectedHistoryIds.includes(item.id) ? "is-selected" : ""
-                    }`}
-                    key={item.id}
-                    onClick={() => {
-                      if (isManagingHistory) {
-                        toggleHistorySelection(item.id);
-                        return;
-                      }
-                      setSelectedHistoryId(item.id);
-                    }}
-                    type="button"
-                  >
-                    <img alt="" src={item.imageDataUrl} />
-                    <span>{formatTime(item.createdAt)}</span>
-                  </button>
-                ))
-              )}
-            </div>
-          </aside>
         </section>
       </main>
+      <button
+        aria-controls="history-sidebar"
+        aria-expanded={isHistorySidebarOpen}
+        aria-label={isHistorySidebarOpen ? "关闭历史侧边栏" : "打开历史侧边栏"}
+        className="history-toggle-button"
+        onClick={() => {
+          if (isHistorySidebarOpen) {
+            setIsManagingHistory(false);
+          }
+          setIsHistorySidebarOpen((current) => !current);
+        }}
+        title={isHistorySidebarOpen ? "关闭历史" : "打开历史"}
+        type="button"
+      >
+        {isHistorySidebarOpen ? <X size={17} /> : <ImageIcon size={17} />}
+        <span>历史</span>
+      </button>
+      <aside
+        aria-hidden={!isHistorySidebarOpen}
+        aria-label="历史记录"
+        className={`panel history-panel history-sidebar ${isHistorySidebarOpen ? "is-open" : ""}`}
+        id="history-sidebar"
+      >
+        <div className={`history-head ${isManagingHistory ? "is-managing" : ""}`}>
+          <div className="history-title-row">
+            <div className="history-title">
+              <h2>历史</h2>
+              <span>{isManagingHistory ? `已选 ${selectedHistoryIds.length}` : isHistoryLoaded ? `${history.length} 张` : "读取中"}</span>
+            </div>
+            {!isManagingHistory ? (
+              <button className="text-button small" onClick={() => setIsManagingHistory(true)} type="button">
+                管理
+              </button>
+            ) : null}
+          </div>
+          {isManagingHistory ? (
+            <div className="history-actions" aria-label="历史批量操作">
+              <button
+                aria-label="下载选中"
+                className="icon-button control-button"
+                disabled={selectedHistoryIds.length === 0}
+                onClick={downloadSelectedHistory}
+                title="下载选中"
+                type="button"
+              >
+                <Download size={17} />
+              </button>
+              <button
+                className="icon-button control-button"
+                disabled={selectedHistoryIds.length === 0}
+                onClick={deleteSelectedHistory}
+                title="删除选中"
+                type="button"
+              >
+                <Trash2 size={17} />
+              </button>
+              <button className="icon-button control-button" onClick={() => setIsManagingHistory(false)} title="完成" type="button">
+                <X size={17} />
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="history-list">
+          {!isHistoryLoaded ? (
+            <div className="empty-history">正在读取历史</div>
+          ) : history.length === 0 ? (
+            <div className="empty-history">暂无记录</div>
+          ) : (
+            history.map((item) => (
+              <button
+                aria-label={`查看 ${formatTime(item.createdAt)}`}
+                className={`history-tile ${item.id === visibleHistoryItem?.id ? "is-active" : ""} ${
+                  selectedHistoryIds.includes(item.id) ? "is-selected" : ""
+                }`}
+                key={item.id}
+                onClick={() => {
+                  if (isManagingHistory) {
+                    toggleHistorySelection(item.id);
+                    return;
+                  }
+                  setSelectedHistoryId(item.id);
+                }}
+                type="button"
+              >
+                <img alt="" src={item.imageDataUrl} />
+                <span>{formatTime(item.createdAt)}</span>
+              </button>
+            ))
+          )}
+        </div>
+      </aside>
+      </div>
       ) : (
         <main className="case-library-page" aria-label="案例专区">
           <section className="case-library-main" aria-label="案例浏览">

@@ -50,9 +50,23 @@ assert(app.includes("downloadHistoryAsZip"), "Batch downloads must create one ZI
 assert(!app.includes("selectedItems.forEach((item) => downloadDataUrl"), "Batch download must not trigger many separate browser downloads.");
 assert(app.includes("history-title-row"), "History header must separate title content from actions.");
 assert(app.includes('aria-label="历史批量操作"'), "History batch controls must be grouped for a cleaner layout.");
-assert(styles.includes("minmax(220px, 240px)"), "History column should have enough width for batch controls.");
+assert(styles.includes("clamp(260px, 19vw, 300px)"), "History sidebar should have enough dynamic width for batch controls.");
 assert(styles.includes(".history-title-row"), "History title row must have dedicated styling.");
 assert(styles.includes(".history-head.is-managing"), "Managing state must have dedicated history header styling.");
+assert(app.includes("isHistorySidebarOpen"), "History must be controlled by an explicit sidebar open state.");
+assert(app.includes("history-sidebar") && styles.includes(".history-sidebar"), "History must render as a dedicated sidebar.");
+assert(app.includes("history-toggle-button") && app.includes("aria-expanded"), "History sidebar must expose an accessible toggle.");
+assert(app.includes("workbench-shell") && styles.includes(".workbench-shell"), "Workbench content must shift together when the history sidebar opens.");
+assert(styles.includes("--history-sidebar-width"), "History sidebar must use a width variable for dynamic extension.");
+assert(styles.includes("flex-basis"), "History sidebar must animate width through flex-basis, not a static column.");
+assert(styles.includes("--history-sidebar-inset"), "Open history sidebar must keep an inset from the right edge.");
+assert(app.includes("compact-setting-row") && styles.includes(".compact-setting-row"), "Aspect ratio and quality controls must share one compact row.");
+assert(app.includes('{ value: "Adaptive", label: "自动" }'), "Adaptive ratio label must be shortened to fit compact controls.");
+const applyCasePromptBlock = app.slice(app.indexOf("const applyCasePrompt"), app.indexOf("const openCaseDetail"));
+assert(
+  applyCasePromptBlock.includes("setIsMobileCaseDetailOpen(false);"),
+  "Applying a mobile case prompt must close the detail sheet and release body scroll lock."
+);
 assert(styles.includes('font-size: clamp(28px, 3vw, 42px);'), "Image Studio brand size must remain unchanged.");
 assert(app.includes("generationTasks"), "Generation flow must expose per-image task cards.");
 assert(app.includes("generation-task-grid"), "Result panel must render generation task cards.");
