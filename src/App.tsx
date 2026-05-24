@@ -57,6 +57,10 @@ const ASPECT_RATIO_OPTIONS: Array<{ value: AspectRatio; label: string }> = [
 
 const IMAGE_SIZES: ImageSize[] = ["4K", "2K", "1K"];
 const ALL_CASE_CATEGORY = "全部";
+const CASE_GRID_MIN_COLUMN_WIDTH = 190;
+const CASE_GRID_GAP = 14;
+const CASE_GRID_OVERSCAN_ROWS = 2;
+const CASE_GRID_FALLBACK_ROW_HEIGHT = 265;
 
 const CASE_CATEGORY_LABELS: Record<string, string> = {
   "Architecture & Spaces": "建筑空间",
@@ -76,6 +80,16 @@ const CASE_CATEGORY_LABELS: Record<string, string> = {
 
 type GenerationTaskStatus = "queued" | "running" | "success" | "failed";
 type ActiveView = "studio" | "cases";
+type CaseImageLoadState = "loading" | "loaded" | "failed";
+
+interface CaseGridMetrics {
+  columns: number;
+  isMobile: boolean;
+  rowHeight: number;
+  scrollTop: number;
+  viewportHeight: number;
+  width: number;
+}
 
 interface GenerationTask {
   id: string;
@@ -89,6 +103,27 @@ interface GenerationTask {
   mimeType?: string;
   createdAt?: string;
   historyId?: string;
+}
+
+function getCaseGridColumnCount(width: number) {
+  return Math.max(1, Math.floor((Math.max(0, width) + CASE_GRID_GAP) / (CASE_GRID_MIN_COLUMN_WIDTH + CASE_GRID_GAP)));
+}
+
+function parsePixelValue(value: string | undefined, fallback: number) {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseGridColumnCount(value: string | undefined) {
+  if (!value || value === "none") {
+    return 0;
+  }
+
+  return value.split(" ").filter((column) => column.trim().length > 0 && column !== "none").length;
 }
 
 const DEFAULT_WORKSPACE: WorkspaceState = {
@@ -445,14 +480,27 @@ export default function App() {
   const [caseLibraryQuery, setCaseLibraryQuery] = useState("");
   const [selectedCaseCategory, setSelectedCaseCategory] = useState(ALL_CASE_CATEGORY);
   const [selectedCaseId, setSelectedCaseId] = useState<number | null>(null);
+  const [caseGridMetrics, setCaseGridMetrics] = useState<CaseGridMetrics>({
+    columns: 1,
+    isMobile: false,
+    rowHeight: CASE_GRID_FALLBACK_ROW_HEIGHT,
+    scrollTop: 0,
+    viewportHeight: CASE_GRID_FALLBACK_ROW_HEIGHT * 2,
+    width: 0
+  });
   const [isMobileCaseDetailOpen, setIsMobileCaseDetailOpen] = useState(false);
   const [copiedCaseId, setCopiedCaseId] = useState<number | null>(null);
+  const [caseImageLoadState, setCaseImageLoadState] = useState<Record<number, CaseImageLoadState>>({});
   const [fileAction, setFileAction] = useState<{ mode: "append" | "replace"; index: number | null }>({
     mode: "append",
     index: null
   });
   const modelLoadRequestRef = useRef(0);
   const casePromptLoadAttemptedRef = useRef(false);
+  const caseGridViewportRef = useRef<HTMLDivElement | null>(null);
+  const caseGridWindowRef = useRef<HTMLDivElement | null>(null);
+  const firstCaseCardRef = useRef<HTMLButtonElement | null>(null);
+  const caseGridMeasureFrameRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedInputImage = inputImages[selectedInputIndex] ?? null;
@@ -482,6 +530,44 @@ export default function App() {
   );
   const selectedCasePrompt = selectedCaseItem ? (casePromptsById[selectedCaseItem.id] ?? selectedCaseItem.prompt ?? "") : "";
   const canUseSelectedCasePrompt = selectedCasePrompt.trim().length > 0;
+  const caseGridTotalRows = Math.ceil(filteredCaseLibrary.length / caseGridMetrics.columns);
+  const caseGridTotalHeight = Math.max(0, caseGridTotalRows * caseGridMetrics.rowHeight);
+  const caseGridVisibleWindow = useMemo(() => {
+    if (filteredCaseLibrary.length === 0) {
+      return {
+        endIndex: 0,
+        offsetY: 0,
+        startIndex: 0,
+        totalHeight: 0
+      };
+    }
+
+    const startRow = Math.max(0, Math.floor(caseGridMetrics.scrollTop / caseGridMetrics.rowHeight) - CASE_GRID_OVERSCAN_ROWS);
+    const endRow = Math.min(
+      caseGridTotalRows,
+      Math.ceil((caseGridMetrics.scrollTop + caseGridMetrics.viewportHeight) / caseGridMetrics.rowHeight) +
+        CASE_GRID_OVERSCAN_ROWS
+    );
+
+    return {
+      endIndex: Math.min(filteredCaseLibrary.length, endRow * caseGridMetrics.columns),
+      offsetY: startRow * caseGridMetrics.rowHeight,
+      startIndex: startRow * caseGridMetrics.columns,
+      totalHeight: caseGridTotalHeight
+    };
+  }, [
+    caseGridMetrics.columns,
+    caseGridMetrics.rowHeight,
+    caseGridMetrics.scrollTop,
+    caseGridMetrics.viewportHeight,
+    caseGridTotalHeight,
+    caseGridTotalRows,
+    filteredCaseLibrary.length
+  ]);
+  const visibleCaseLibrary = useMemo(
+    () => filteredCaseLibrary.slice(caseGridVisibleWindow.startIndex, caseGridVisibleWindow.endIndex),
+    [caseGridVisibleWindow.endIndex, caseGridVisibleWindow.startIndex, filteredCaseLibrary]
+  );
   const promptQueue = useMemo(() => parsePromptQueue(workspace.prompt), [workspace.prompt]);
   const plannedTaskCount =
     workspace.promptMode === "queue"
@@ -508,8 +594,79 @@ export default function App() {
       : statusMessage;
   const isStatusBusy = activeView === "cases" ? isCaseLibraryLoading : isGenerating || isLoadingModels;
 
+  const measureCaseGrid = useCallback(() => {
+    const viewport = caseGridViewportRef.current;
+    const gridWindow = caseGridWindowRef.current;
+    if (!viewport || !gridWindow) {
+      return;
+    }
+
+    const isCaseGridMobile = window.matchMedia("(max-width: 900px)").matches;
+    const viewportRect = viewport.getBoundingClientRect();
+    const gridStyles = window.getComputedStyle(gridWindow);
+    const measuredColumns = parseGridColumnCount(gridStyles.gridTemplateColumns);
+    const measuredGap = parsePixelValue(gridStyles.rowGap || gridStyles.gap, CASE_GRID_GAP);
+    const measuredCardHeight = firstCaseCardRef.current?.getBoundingClientRect().height ?? 0;
+    const nextRowHeight = measuredCardHeight > 0 ? measuredCardHeight + measuredGap : CASE_GRID_FALLBACK_ROW_HEIGHT;
+    const absoluteViewportTop = viewportRect.top + window.scrollY;
+    const usesWindowScroll =
+      isCaseGridMobile || viewport.scrollHeight <= viewport.clientHeight + 1 || viewportRect.height > window.innerHeight;
+    const nextScrollTop = usesWindowScroll ? Math.max(0, window.scrollY - absoluteViewportTop) : viewport.scrollTop;
+    const nextViewportHeight = usesWindowScroll ? window.innerHeight : viewport.clientHeight || window.innerHeight;
+    const nextWidth = viewport.clientWidth || viewportRect.width;
+    const nextColumns = Math.max(1, measuredColumns || getCaseGridColumnCount(nextWidth));
+
+    setCaseGridMetrics((current) => {
+      const next = {
+        columns: nextColumns,
+        isMobile: isCaseGridMobile,
+        rowHeight: nextRowHeight,
+        scrollTop: nextScrollTop,
+        viewportHeight: nextViewportHeight,
+        width: nextWidth
+      };
+
+      if (
+        current.columns === next.columns &&
+        current.isMobile === next.isMobile &&
+        Math.abs(current.rowHeight - next.rowHeight) < 0.5 &&
+        Math.abs(current.scrollTop - next.scrollTop) < 0.5 &&
+        Math.abs(current.viewportHeight - next.viewportHeight) < 0.5 &&
+        Math.abs(current.width - next.width) < 0.5
+      ) {
+        return current;
+      }
+
+      return next;
+    });
+  }, []);
+
+  const scheduleCaseGridMeasure = useCallback(() => {
+    if (caseGridMeasureFrameRef.current !== null) {
+      return;
+    }
+
+    caseGridMeasureFrameRef.current = window.requestAnimationFrame(() => {
+      caseGridMeasureFrameRef.current = null;
+      measureCaseGrid();
+    });
+  }, [measureCaseGrid]);
+
   const updateWorkspace = useCallback((patch: Partial<WorkspaceState>) => {
     setWorkspace((current) => ({ ...current, ...patch }));
+  }, []);
+
+  const markCaseImageState = useCallback((caseId: number, state: CaseImageLoadState) => {
+    setCaseImageLoadState((current) => {
+      if (current[caseId] === state) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [caseId]: state
+      };
+    });
   }, []);
 
   const copyCasePrompt = useCallback(async (caseItem: CaseLibraryItem) => {
@@ -675,6 +832,65 @@ export default function App() {
       isActive = false;
     };
   }, [activeView, caseLibraryItems.length]);
+
+  useEffect(() => {
+    if (activeView !== "cases") {
+      return;
+    }
+
+    const viewport = caseGridViewportRef.current;
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => {
+            scheduleCaseGridMeasure();
+          });
+
+    const handleLayoutChange = () => {
+      scheduleCaseGridMeasure();
+    };
+
+    viewport?.addEventListener("scroll", handleLayoutChange, { passive: true });
+    window.addEventListener("scroll", handleLayoutChange, { passive: true });
+    window.addEventListener("resize", handleLayoutChange);
+    if (viewport) {
+      resizeObserver?.observe(viewport);
+    }
+    if (caseGridWindowRef.current) {
+      resizeObserver?.observe(caseGridWindowRef.current);
+    }
+    scheduleCaseGridMeasure();
+
+    return () => {
+      viewport?.removeEventListener("scroll", handleLayoutChange);
+      window.removeEventListener("scroll", handleLayoutChange);
+      window.removeEventListener("resize", handleLayoutChange);
+      resizeObserver?.disconnect();
+      if (caseGridMeasureFrameRef.current !== null) {
+        window.cancelAnimationFrame(caseGridMeasureFrameRef.current);
+        caseGridMeasureFrameRef.current = null;
+      }
+    };
+  }, [activeView, scheduleCaseGridMeasure]);
+
+  useEffect(() => {
+    if (activeView !== "cases") {
+      return;
+    }
+
+    const viewport = caseGridViewportRef.current;
+    if (viewport) {
+      viewport.scrollTop = 0;
+    }
+    setCaseGridMetrics((current) => ({ ...current, scrollTop: 0 }));
+    scheduleCaseGridMeasure();
+  }, [activeView, caseLibraryItems.length, caseLibraryQuery, scheduleCaseGridMeasure, selectedCaseCategory]);
+
+  useEffect(() => {
+    if (activeView === "cases") {
+      scheduleCaseGridMeasure();
+    }
+  }, [activeView, scheduleCaseGridMeasure, visibleCaseLibrary.length]);
 
   useEffect(() => {
     let isActive = true;
@@ -1651,30 +1867,51 @@ export default function App() {
                 <span>请确认本地 /cases-index.json 可以访问。</span>
               </div>
             ) : filteredCaseLibrary.length > 0 ? (
-              <div className="case-library-grid">
-                {filteredCaseLibrary.map((caseItem, index) => (
-                  <button
-                    className={`case-card ${selectedCaseItem?.id === caseItem.id ? "is-active" : ""}`}
-                    key={caseItem.id}
-                    onClick={() => openCaseDetail(caseItem.id)}
-                    type="button"
+              <div className="case-library-grid-viewport" ref={caseGridViewportRef}>
+                <div className="case-library-grid-spacer" style={{ height: `${caseGridVisibleWindow.totalHeight}px` }}>
+                  <div
+                    className="case-library-grid case-library-grid-window"
+                    ref={caseGridWindowRef}
+                    style={{ transform: `translateY(${caseGridVisibleWindow.offsetY}px)` }}
                   >
-                    <span className="case-image-wrap">
-                      <img
-                        alt={caseItem.imageAlt}
-                        decoding="async"
-                        fetchPriority={index < 4 ? "high" : "auto"}
-                        loading="lazy"
-                        src={caseItem.thumbImage}
-                      />
-                      <span>#{caseItem.id}</span>
-                    </span>
-                    <span className="case-card-body">
-                      <strong>{caseItem.title}</strong>
-                      <small>{localizeCaseCategory(caseItem.category)}</small>
-                    </span>
-                  </button>
-                ))}
+                    {visibleCaseLibrary.map((caseItem, index) => {
+                      const caseIndex = caseGridVisibleWindow.startIndex + index;
+                      const imageState = caseImageLoadState[caseItem.id] ?? "loading";
+                      return (
+                        <button
+                          className={`case-card ${selectedCaseItem?.id === caseItem.id ? "is-active" : ""}`}
+                          key={caseItem.id}
+                          onClick={() => openCaseDetail(caseItem.id)}
+                          ref={index === 0 ? firstCaseCardRef : null}
+                          type="button"
+                        >
+                          <span className={`case-image-wrap is-${imageState}`}>
+                            <img
+                              alt={caseItem.imageAlt}
+                              decoding="async"
+                              fetchPriority={caseIndex < 4 ? "high" : "auto"}
+                              loading="lazy"
+                              onError={() => markCaseImageState(caseItem.id, "failed")}
+                              onLoad={() => markCaseImageState(caseItem.id, "loaded")}
+                              src={caseItem.thumbImage}
+                            />
+                            {imageState === "failed" ? (
+                              <span className="case-image-fallback">
+                                <ImageIcon size={22} />
+                                预览加载失败
+                              </span>
+                            ) : null}
+                            <span className="case-image-index">#{caseItem.id}</span>
+                          </span>
+                          <span className="case-card-body">
+                            <strong>{caseItem.title}</strong>
+                            <small>{localizeCaseCategory(caseItem.category)}</small>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="empty-case-library">
