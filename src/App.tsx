@@ -42,10 +42,13 @@ import { downloadHistoryAsZip } from "./zipArchive";
 const WORKSPACE_KEY = "custom-image-workspace-v2";
 const ANNOUNCEMENT_VERSION = "2026-05-20";
 const ANNOUNCEMENT_STORAGE_KEY = "image-studio-announcement-version";
+const DEFAULT_MODEL_MIGRATION_KEY = "custom-image-default-model-migration";
+const DEFAULT_MODEL_MIGRATION_VERSION = "image2-2026-06-03";
 const INPUT_IMAGE_LIMIT = 12;
 const HISTORY_LIMIT = 40;
 const DEFAULT_BASE_URL = "https://api.lts4ai.com";
 const LEGACY_DEFAULT_BASE_URLS = new Set(["http://64.186.244.43:12001"]);
+const LEGACY_DEFAULT_MODEL_NAMES = new Set(["gemini-3.1-flash-image"]);
 const LEGACY_DEFAULT_PROMPTS = new Set([
   "把参考图中的服装穿到模特身上，保持版型、材质和细节一致。"
 ]);
@@ -156,12 +159,25 @@ function readStoredWorkspace(): WorkspaceState {
     const raw = localStorage.getItem(WORKSPACE_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     const workspace = { ...DEFAULT_WORKSPACE, ...parsed };
+    const storedModelName = typeof workspace.modelName === "string" ? workspace.modelName : "";
+    let modelName = storedModelName;
+    try {
+      if (
+        localStorage.getItem(DEFAULT_MODEL_MIGRATION_KEY) !== DEFAULT_MODEL_MIGRATION_VERSION &&
+        LEGACY_DEFAULT_MODEL_NAMES.has(storedModelName)
+      ) {
+        modelName = "";
+        localStorage.setItem(DEFAULT_MODEL_MIGRATION_KEY, DEFAULT_MODEL_MIGRATION_VERSION);
+      }
+    } catch {
+      // Ignore restricted storage; model loading will still pick the default for fresh sessions.
+    }
     return {
       theme: workspace.theme === "dark" ? "dark" : "light",
       prompt: LEGACY_DEFAULT_PROMPTS.has(workspace.prompt) ? "" : workspace.prompt,
       apiKey: typeof workspace.apiKey === "string" ? workspace.apiKey : "",
       baseUrl: LEGACY_DEFAULT_BASE_URLS.has(workspace.baseUrl) ? DEFAULT_BASE_URL : workspace.baseUrl,
-      modelName: typeof workspace.modelName === "string" ? workspace.modelName : "",
+      modelName,
       protocol: workspace.protocol,
       aspectRatio: workspace.aspectRatio,
       imageSize: workspace.imageSize,

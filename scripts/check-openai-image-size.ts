@@ -27,6 +27,8 @@ Object.entries(expected4kSizes).forEach(([ratio, expected]) => {
 });
 
 assertEqual(toOpenAiImageSize("Adaptive", "4K"), "3840x2160", "Adaptive 4K fallback");
+assertEqual(toOpenAiImageSize("Adaptive", "1K"), "1024x1024", "Adaptive 1K should avoid provider auto size");
+assertEqual(toOpenAiImageSize("Adaptive", "2K"), "1024x1024", "Adaptive 2K should avoid provider auto size");
 assertEqual(toOpenAiImageSize("1:1", "2K"), "1024x1024", "Non-4K square size");
 assertEqual(toOpenAiImageSize("16:9", "2K"), "1536x1024", "Non-4K landscape size");
 assertEqual(toOpenAiImageSize("9:16", "2K"), "1024x1536", "Non-4K portrait size");

@@ -136,6 +136,7 @@ function toOpenAiImageSize(aspectRatio: AspectRatio, imageSize: ImageSize) {
   }
 
   switch (aspectRatio) {
+    case "Adaptive":
     case "1:1":
       return "1024x1024";
     case "16:9":
@@ -293,15 +294,31 @@ function isOpenAiImageModelId(modelId: string) {
     return true;
   }
 
+  if (normalizedModelId.includes("gemini") && normalizedModelId.includes("image")) {
+    return true;
+  }
+
+  if (normalizedModelId.includes("imagen")) {
+    return true;
+  }
+
   return /\bgpt[-\d.]*-image(?:-\d+)?\b/u.test(normalizedModelId);
 }
 
-function inferModelProtocol(modelId: string, fallback: ProviderProtocol): ProviderProtocol {
-  return isOpenAiImageModelId(modelId) ? "openai_images" : fallback;
+function inferOpenAiModelProtocol(modelId: string): ProviderProtocol {
+  return isOpenAiImageModelId(modelId) ? "openai_images" : "openai_chat_completions";
+}
+
+function isImage2ModelId(modelId: string) {
+  const normalizedModelId = modelId.trim().toLowerCase();
+  return normalizedModelId === "gpt-image-2" || normalizedModelId === "gptimage2" || normalizedModelId === "image2";
 }
 
 function modelPriority(model: ProviderModelOption) {
   const id = model.id.toLowerCase();
+  if (isImage2ModelId(id)) {
+    return -1;
+  }
   if (id.includes("gemini") && id.includes("pro") && id.includes("image")) {
     return 0;
   }
@@ -339,7 +356,7 @@ function dedupeModels(models: ProviderModelOption[]) {
       return;
     }
     seen.add(id);
-    result.push({ id, protocol: inferModelProtocol(id, model.protocol) });
+    result.push({ id, protocol: model.protocol });
   });
 
   return sortModels(preferImageModels(result));
@@ -358,7 +375,7 @@ function readGeminiModels(raw: any): ProviderModelOption[] {
 
       return {
         id,
-        protocol: inferModelProtocol(id, "gemini_generate_content")
+        protocol: "gemini_generate_content"
       };
     })
     .filter((item: ProviderModelOption | null): item is ProviderModelOption => Boolean(item));
@@ -376,7 +393,7 @@ function readOpenAiModels(raw: any): ProviderModelOption[] {
 
       return {
         id,
-        protocol: inferModelProtocol(id, "openai_chat_completions")
+        protocol: inferOpenAiModelProtocol(id)
       };
     })
     .filter((item: ProviderModelOption | null): item is ProviderModelOption => Boolean(item));
