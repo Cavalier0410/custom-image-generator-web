@@ -43,12 +43,13 @@ const WORKSPACE_KEY = "custom-image-workspace-v2";
 const ANNOUNCEMENT_VERSION = "2026-05-20";
 const ANNOUNCEMENT_STORAGE_KEY = "image-studio-announcement-version";
 const DEFAULT_MODEL_MIGRATION_KEY = "custom-image-default-model-migration";
-const DEFAULT_MODEL_MIGRATION_VERSION = "image2-2026-06-03";
+const DEFAULT_MODEL_MIGRATION_VERSION = "sufy-image2-2026-06-20";
 const INPUT_IMAGE_LIMIT = 12;
 const HISTORY_LIMIT = 40;
 const DEFAULT_BASE_URL = "https://api.lts4ai.com";
+const PREFERRED_IMAGE_MODEL_ID = "openai/gpt-image-2";
 const LEGACY_DEFAULT_BASE_URLS = new Set(["http://64.186.244.43:12001"]);
-const LEGACY_DEFAULT_MODEL_NAMES = new Set(["gemini-3.1-flash-image"]);
+const LEGACY_DEFAULT_MODEL_NAMES = new Set(["gemini-3.1-flash-image", "gpt-image-2"]);
 const LEGACY_DEFAULT_PROMPTS = new Set([
   "把参考图中的服装穿到模特身上，保持版型、材质和细节一致。"
 ]);
@@ -378,6 +379,11 @@ async function copyTextToClipboard(text: string) {
 }
 
 function pickDefaultModel(models: ProviderModelOption[], currentModelName: string) {
+  const preferredImageModel = models.find((model) => model.id === PREFERRED_IMAGE_MODEL_ID);
+  if (preferredImageModel && (!currentModelName || currentModelName === "gpt-image-2")) {
+    return preferredImageModel;
+  }
+
   const currentModel = models.find((model) => model.id === currentModelName);
   if (currentModel) {
     return currentModel;
